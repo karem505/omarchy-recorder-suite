@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Pause or resume the current recording, whichever applies. Bind to ALT + P.
+#
+# The system recorder takes priority: omarchy screenrecord runs
+# gpu-screen-recorder, which toggles pause on SIGUSR2 (regular recording
+# only, which is the only mode omarchy uses). When it is not running, fall
+# back to an OBS pause toggle if one is installed, so the same key can serve
+# both recorders.
+#
+# gpu-screen-recorder does not report its pause state, so it is tracked in a
+# runtime file. A file older than the recorder process belongs to a previous
+# recording and is discarded.
+
+STATE="${XDG_RUNTIME_DIR:-/tmp}/omarchy-screenrecord-paused"
+
+pid=$(pgrep -of "^gpu-screen-recorder")
+if [[ -z $pid ]]; then
+  rm -f "$STATE"
+  command -v obs-record-pause-toggle >/dev/null && exec obs-record-pause-toggle
+  exit 0
+fi
+
+[[ -f $STATE && ! $STATE -nt /proc/$pid ]] && rm -f "$STATE"
+
+kill -USR2 "$pid" || exit 1
+
+if [[ -f $STATE ]]; then
+  rm -f "$STATE"
+  omarchy-notification-send -t 2000 "Recording resumed"
+else
+  touch "$STATE"
+  omarchy-notification-send -t 2000 "Recording paused" "ALT + P resumes"
+fi

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Smooth compositor zoom toward the mouse, for recordly-style zoom in screen
+# recordings. Bound to F2 (smart mode).
+#
+# Uses Hyprland's cursor.zoom_factor: the zoomFactor animation eases the
+# transition and the magnified view follows the mouse (zoom_rigid is off), so
+# a running recording captures the zoom live.
+#
+# Usage: zoom-to-mouse [smart|toggle|in|out|reset] [factor]
+#
+# smart: while the system recorder (omarchy screenrecord) is running -- or
+# the screen is already zoomed, so a stale zoom can always be dismissed --
+# toggle the zoom. Otherwise forward F2 to OBS, preserving the old OBS
+# zoom-to-mouse behavior of this key (matches nothing and quietly does
+# nothing when OBS is closed).
+#
+# /usr/bin/hyprctl is used directly: runtime config changes on this Lua
+# build go through `hyprctl eval`, and `hyprctl keyword` is rejected.
+
+HYPRCTL=/usr/bin/hyprctl
+FACTOR="${2:-${OMARCHY_ZOOM_FACTOR:-2}}"
+
+current() { $HYPRCTL getoption cursor:zoom_factor | awk 'NR==1 {print $2}'; }
+set_zoom() { $HYPRCTL eval "hl.config({ cursor = { zoom_factor = $1 } })" >/dev/null; }
+zoomed() { awk -v z="$(current)" 'BEGIN { exit !(z > 1.01) }'; }
+toggle() { if zoomed; then set_zoom 1; else set_zoom "$FACTOR"; fi; }
+
+case "${1:-toggle}" in
+toggle) toggle ;;
+in) set_zoom "$(awk -v z="$(current)" 'BEGIN { print z + 0.5 }')" ;;
+out) set_zoom "$(awk -v z="$(current)" 'BEGIN { z -= 0.5; print (z < 1) ? 1 : z }')" ;;
+reset) set_zoom 1 ;;
+smart)
+  if pgrep -f "^gpu-screen-recorder" >/dev/null || zoomed; then
+    toggle
+  else
+    $HYPRCTL dispatch 'hl.dsp.send_shortcut({ mods = 0, key = "F2", window = "class:^(com.obsproject.Studio)$" })' >/dev/null
+  fi
+  ;;
+*)
+  echo "usage: zoom-to-mouse [smart|toggle|in|out|reset] [factor]" >&2
+  exit 1
+  ;;
+esac

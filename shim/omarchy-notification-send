@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# PATH shim, put in front of /usr/share/omarchy/bin by screenrecord-toggle.
+# Rewrites the finished-recording notification's click action from mpv to the
+# Montage editor and forwards everything else untouched to the real
+# omarchy-notification-send. Update-proof: if the packaged notification ever
+# stops using "mpv <file>" as its --exec, this simply forwards verbatim.
+
+REAL="${RECORDER_SHIM_REAL:-/usr/share/omarchy/bin/omarchy-notification-send}"
+
+args=()
+rewrite_next=0
+for a in "$@"; do
+  if ((rewrite_next)); then
+    rewrite_next=0
+    if [[ $a == mpv\ * ]]; then
+      a="$HOME/.local/bin/montage-editor ${a#mpv }"
+      printf '%s\n' "$a" >"${XDG_RUNTIME_DIR:-/tmp}/recorder-shim-last" 2>/dev/null
+    fi
+  elif [[ $a == "--exec" ]]; then
+    rewrite_next=1
+  fi
+  args+=("$a")
+done
+
+exec "$REAL" "${args[@]}"

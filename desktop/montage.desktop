@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Montage
+GenericName=Video Editor
+Comment=Simple video montage editor for screen recordings
+Exec=montage-editor %f
+Icon=montage
+Terminal=false
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/mpeg;
+Keywords=video;editor;cut;trim;overlay;recording;

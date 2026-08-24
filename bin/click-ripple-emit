@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Fired by the non-consuming mouse:272 bind on every left click. Draws a
+# ripple wave at the cursor via the recorder-suite.click-ripple shell plugin,
+# but only while the system screen recorder is running.
+#
+# The file check keeps the no-recording cost of the global click bind to a
+# stat; the pgrep behind it guards against a marker file left by a crashed
+# recording.
+
+[[ -f /tmp/omarchy-screenrecord-filename ]] || exit 0
+pgrep -f "^gpu-screen-recorder" >/dev/null || exit 0
+
+pos=$(/usr/bin/hyprctl cursorpos) || exit 0 # "x, y"
+x=${pos%%,*}
+y=${pos#*, }
+
+exec omarchy-shell -q recorder-suite.click-ripple ripple "$x" "$y"

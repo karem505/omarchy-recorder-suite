@@ -1,0 +1,5 @@
+singleton Theme 1.0 Theme.qml
+MButton 1.0 MButton.qml
+MSlider 1.0 MSlider.qml
+IconButton 1.0 IconButton.qml
+Timeline 1.0 Timeline.qml

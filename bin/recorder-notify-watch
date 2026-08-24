@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Watches for finished omarchy screen recordings and offers to edit them in
+# Montage. Runs as a singleton (flock) child of the recorder-suite shell
+# service, so it lives and dies with the shell.
+#
+# When the recording was stopped through screenrecord-toggle (ALT + PRINT),
+# the recorder-shim has already rewired the stock "saved" notification to
+# open Montage; those stops are detected via recorder-shim-last and skipped
+# so only one clickable path exists per recording.
+
+RUNTIME="${XDG_RUNTIME_DIR:-/tmp}"
+MARKER=/tmp/omarchy-screenrecord-filename
+SHIMLAST="$RUNTIME/recorder-shim-last"
+LOG="$RUNTIME/recorder-notify-last"
+EDITOR="$HOME/.local/bin/montage-editor"
+
+exec 9>"$RUNTIME/recorder-notify-watch.lock"
+flock -n 9 || exit 0
+
+last=""
+while sleep 1; do
+  cur=$(cat "$MARKER" 2>/dev/null || true)
+  if [[ -z $cur && -n $last && -f $last ]]; then
+    # The marker is removed after the stock notification is sent, so if the
+    # shim ran for this file its record already exists. Small grace anyway.
+    sleep 1
+    if [[ -f $SHIMLAST ]] && grep -qF "$last" "$SHIMLAST" &&
+      (($(date +%s) - $(stat -c %Y "$SHIMLAST") < 20)); then
+      echo "skip (shim handled): $last" >"$LOG"
+    else
+      echo "notify: $last" >"$LOG"
+      omarchy-notification-send -t 10000 "Edit recording" "Open in Montage (or click)" \
+        --exec "$EDITOR $last"
+    fi
+  fi
+  last=$cur
+done

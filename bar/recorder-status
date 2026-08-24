@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Bar module: system screen recorder pause/zoom status.
+#
+# Shows a pause badge while an omarchy screenrecording is paused and the
+# magnifier with the zoom level while the Hyprland cursor zoom is active.
+# Prints NOTHING to hide (same command-widget contract as obs-zoom-status
+# next to it: empty output renders as blank, {"text":""} would not).
+
+STATE="${XDG_RUNTIME_DIR:-/tmp}/omarchy-screenrecord-paused"
+
+hidden() { exit 0; }
+
+pid=$(pgrep -of "^gpu-screen-recorder")
+paused=0
+# The marker must be newer than the recorder process, or it is a leftover
+# from a previous recording.
+[[ -n $pid && -f $STATE && $STATE -nt /proc/$pid ]] && paused=1
+
+zoom=$(/usr/bin/hyprctl getoption cursor:zoom_factor 2>/dev/null | awk 'NR==1 {print $2}')
+zoomtext=$(awk -v z="${zoom:-1}" 'BEGIN { if (z > 1.01) printf "%.1f", z }')
+zoomtext=${zoomtext%.0}
+
+text="" tip=""
+if ((paused)); then
+  text="󰏤 paused"
+  tip="Recording paused — ALT + P resumes"
+fi
+if [[ -n $zoomtext ]]; then
+  [[ -n $text ]] && { text+="  "; tip+=", "; }
+  text+="󰍉 ${zoomtext}×"
+  tip+="Zoomed ${zoomtext}× — F2 toggles"
+fi
+[[ -n $text ]] || hidden
+
+printf '{"text":"%s","tooltip":"%s","class":"active"}\n' "$text" "$tip"

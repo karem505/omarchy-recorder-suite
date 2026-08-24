@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# ALT + PRINT: toggle screen recording, same as the stock binding, but with
+# the recorder-shim in front of PATH so the "Screen recording saved"
+# notification's click opens the Montage editor instead of mpv. The shim dir
+# holds only omarchy-notification-send; everything else still resolves to the
+# packaged binaries.
+
+export PATH="$HOME/.local/lib/recorder-shim:$PATH"
+
+omarchy-capture-screenrecording --stop-recording ||
+  exec omarchy-menu toggle trigger.capture.screenrecord

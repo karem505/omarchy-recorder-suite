@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "recorder-suite.click-ripple",
+  "name": "Recorder Suite",
+  "version": "1.0.0",
+  "author": "karem505",
+  "description": "Click ripple waves while screen recording, plus the finished-recording watcher that offers editing in Montage",
+  "kinds": [
+    "service"
+  ],
+  "entryPoints": {
+    "service": "Ripple.qml"
+  }
+}
