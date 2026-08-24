@@ -8,7 +8,7 @@ notification.
 Everything installs into user-owned locations only. Nothing under
 `/usr/share/omarchy` is modified, so `omarchy update` never breaks it.
 
-![Montage editor](docs/montage-editor.png)
+![Demo](docs/demo.gif)
 
 ## Features
 
@@ -46,8 +46,6 @@ Everything installs into user-owned locations only. Nothing under
   - ffmpeg export with progress, saved as `<name>-montage.mp4`
   - themed from your active Omarchy theme (`colors.toml`, watched live) with
     a design borrowed from [omacut](https://github.com/basecamp/omacut)
-
-![Montage overlay](docs/montage-overlay.png)
 
 ## Requirements
 
