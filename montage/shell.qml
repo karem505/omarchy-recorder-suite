@@ -18,6 +18,9 @@ ShellRoot {
   readonly property int videoW: parseInt(Quickshell.env("MONTAGE_W") || "0") || 1920
   readonly property int videoH: parseInt(Quickshell.env("MONTAGE_H") || "0") || 1080
   readonly property bool hasAudio: (Quickshell.env("MONTAGE_HAS_AUDIO") || "") === "1"
+  // Hardware encoding, probed by the launcher (empty when unsupported).
+  readonly property string hwType: Quickshell.env("MONTAGE_HWENC") || ""
+  readonly property string hwDev: Quickshell.env("MONTAGE_VAAPI_DEV") || ""
 
   FloatingWindow {
     id: win
@@ -43,6 +46,10 @@ ShellRoot {
     property bool exporting: false
     property real exportProgress: 0
     property real exportTotalS: 1
+    // Turned off after a failed hardware encode so the retry (and any later
+    // exports this session) use the CPU path.
+    property bool hwAllowed: true
+    property bool lastExportUsedHw: false
     property string statusText: rootScope.videoFile === ""
       ? "No video file — run: montage-editor <file>" : ""
     property string outFile: ""
@@ -101,12 +108,15 @@ ShellRoot {
           e: effOvEnd
         } : null
       }
+      var useHw = rootScope.hwType === "vaapi" && rootScope.hwDev !== "" && hwAllowed
+      opts.hw = useHw ? { device: rootScope.hwDev } : null
+      lastExportUsedHw = useHw
       var cutTotal = 0
       for (var j = 0; j < cuts.length; j++) cutTotal += cuts[j].e - cuts[j].s
       exportTotalS = Math.max(0.1, durationS - cutTotal)
       exportProgress = 0
       exporting = true
-      statusText = "Exporting…"
+      statusText = "Exporting… (" + (useHw ? "GPU" : "CPU") + ")"
       player.pause()
       exportProc.command = Export.buildArgs(opts)
       exportProc.running = true
@@ -179,6 +189,10 @@ ShellRoot {
           win.statusText = "Saved: " + win.outFile
           Quickshell.execDetached(["omarchy-notification-send", "-t", "8000",
             "Montage exported", win.outFile])
+        } else if (win.lastExportUsedHw) {
+          win.hwAllowed = false
+          win.statusText = "GPU encode failed — retrying on CPU"
+          win.startExport()
         } else {
           win.statusText = "Export failed (ffmpeg exit " + code + ")"
         }

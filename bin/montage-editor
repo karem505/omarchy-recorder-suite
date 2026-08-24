@@ -19,7 +19,23 @@ H=${probe##*x}
 dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f")
 audio=$(ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "$f" | head -1)
 
+# Probe for a VAAPI-capable render node; Montage encodes on the GPU when one
+# works and falls back to CPU (libx264) otherwise. On dual-GPU machines the
+# first node is not always the right one, so each is actually test-encoded.
+HWENC=""
+VAAPI_DEV=""
+for d in /dev/dri/renderD*; do
+  [[ -e $d ]] || continue
+  if ffmpeg -v error -vaapi_device "$d" -f lavfi -i color=black:s=320x240:d=0.1 \
+    -vf format=nv12,hwupload -c:v h264_vaapi -f null - >/dev/null 2>&1; then
+    HWENC="vaapi"
+    VAAPI_DEV="$d"
+    break
+  fi
+done
+
 exec env MONTAGE_FILE="$f" MONTAGE_W="$W" MONTAGE_H="$H" \
   MONTAGE_DUR="$dur" MONTAGE_HAS_AUDIO="${audio:+1}" \
   MONTAGE_THUMBS="${XDG_RUNTIME_DIR:-/tmp}/montage-thumbs-$$" \
+  MONTAGE_HWENC="$HWENC" MONTAGE_VAAPI_DEV="$VAAPI_DEV" \
   quickshell -p "$HOME/.config/quickshell/montage"

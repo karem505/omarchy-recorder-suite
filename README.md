@@ -43,7 +43,9 @@ Everything installs into user-owned locations only. Nothing under
     timeline, removed on export with audio kept in sync
   - zoomable filmstrip timeline with real frame thumbnails (Ctrl+wheel zooms
     around the cursor, wheel pans, click/drag seeks)
-  - ffmpeg export with progress, saved as `<name>-montage.mp4`
+  - ffmpeg export with progress, saved as `<name>-montage.mp4` —
+    hardware-accelerated (VAAPI, probed per render node so dual-GPU laptops
+    pick the right card) with automatic CPU fallback
   - themed from your active Omarchy theme (`colors.toml`, watched live) with
     a design borrowed from [omacut](https://github.com/basecamp/omacut)
 
