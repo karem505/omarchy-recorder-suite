@@ -46,7 +46,9 @@ function buildArgs(opts) {
   if (opts.hw)
     parts.push("[vcpu]format=nv12,hwupload[vout]")
 
-  var args = ["ffmpeg", "-y"]
+  // nice keeps the desktop responsive: the export still uses every idle
+  // core, it just yields to interactive work first.
+  var args = ["nice", "-n", "10", "ffmpeg", "-y"]
   if (opts.hw)
     args = args.concat(["-vaapi_device", opts.hw.device])
   args = args.concat(["-i", opts.video])
