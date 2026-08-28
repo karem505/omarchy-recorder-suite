@@ -74,6 +74,24 @@ the `omarchy-recorder-suite` block at the bottom of
 `~/.config/hypr/bindings.lua` to taste (add `hl.unbind(...)` lines or pick
 other keys).
 
+## Update / deploy
+
+The repo carries a small deployer — a fixed menu of recipes, no free-form
+shell, dry-run by default:
+
+```bash
+./deploy.sh status    # installed sha vs what's on GitHub
+./deploy.sh pull      # fetch + preview incoming commits (read-only)
+./deploy.sh deploy    # fast-forward to origin/master + re-run install.sh
+./deploy.sh logs      # last 60 recorder lines from the user journal
+```
+
+`deploy` only prints its commands until you explicitly run
+`DRY_RUN=false ./deploy.sh deploy`. Incoming commits that look
+experimental (`wip`, `experiment`, `spike`, `do-not-deploy`, …) are
+flagged — a warning, not a decision. Local changes or a diverged branch
+stop the deploy; nothing is ever force-reset.
+
 ## Keys
 
 | Key | Action |
