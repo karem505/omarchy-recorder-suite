@@ -24,8 +24,12 @@ fi
 if [[ -f $SHELL_JSON ]] && grep -q 'recorder-suite.click-ripple\|recorder-status' "$SHELL_JSON"; then
   cp "$SHELL_JSON" "$SHELL_JSON.bak.recorder-suite-uninstall.$STAMP"
   tmp="$(mktemp)"
+  # Strip the widget from every bar section - the user may have moved it.
   jq '.plugins = ((.plugins // []) | map(select(.id != "recorder-suite.click-ripple")))
-      | .bar.layout.center = ((.bar.layout.center // []) | map(select(.id != "recorder-status")))' \
+      | (if (.bar.layout | type) == "object" then
+          .bar.layout |= with_entries(.value |=
+            (if type == "array" then map(select(.id != "recorder-status")) else . end))
+        else . end)' \
     "$SHELL_JSON" >"$tmp" && mv "$tmp" "$SHELL_JSON"
 fi
 

@@ -74,6 +74,20 @@ the `omarchy-recorder-suite` block at the bottom of
 `~/.config/hypr/bindings.lua` to taste (add `hl.unbind(...)` lines or pick
 other keys).
 
+## Updating / recovering
+
+`git pull && ./install.sh` any time — the installer is **idempotent**: it
+refreshes the scripts and the Montage app in place, and never duplicates
+the bar widget, the plugin entry, or the keybinding block, even across
+repeated runs or a widget you've moved to another bar section.
+
+If `omarchy refresh hyprland` (or an update migration) resets your
+`bindings.lua`, the suite's keys disappear while everything else keeps
+working — just re-run `./install.sh` to restore the keybinding block. If
+the installer warns that recorder-suite scripts are referenced outside its
+managed block, you have leftover manual binds; remove them first so a key
+never fires twice (a double-fired pause toggles pause+resume in one press).
+
 ## Update / deploy
 
 The repo carries a small deployer — a fixed menu of recipes, no free-form

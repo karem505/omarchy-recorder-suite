@@ -43,22 +43,46 @@ update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
 say "Enabling the plugin and bar widget in shell.json"
-if [[ -f $SHELL_JSON ]] && ! grep -q 'recorder-suite.click-ripple' "$SHELL_JSON"; then
+if [[ -f $SHELL_JSON ]]; then
   cp "$SHELL_JSON" "$SHELL_JSON.bak.recorder-suite.$STAMP"
+  # Idempotent by construction: remove our entries wherever they are (the
+  # user may have moved the widget to another bar section), then add exactly
+  # one of each back. Safe to re-run after updates or config resets.
   tmp="$(mktemp)"
-  jq '.plugins = ((.plugins // []) + [{"id": "recorder-suite.click-ripple"}])
-      | .bar.layout.center = ((.bar.layout.center // []) + [{
-          "id": "recorder-status",
-          "type": "command",
-          "exec": "~/.config/omarchy/bar/scripts/recorder-status",
-          "interval": 1,
-          "tooltip": "Recorder status",
-          "onClick": "screenrecord-pause-toggle"
-        }])' "$SHELL_JSON" >"$tmp" && mv "$tmp" "$SHELL_JSON"
+  jq '.plugins = ((.plugins // []) | map(select(.id != "recorder-suite.click-ripple"))
+        + [{"id": "recorder-suite.click-ripple"}])
+      | (if (.bar.layout | type) == "object" then
+          .bar.layout |= with_entries(.value |=
+            (if type == "array" then map(select(.id != "recorder-status")) else . end))
+        else . end)
+      | (if (.bar.layout.center | type) == "array" then
+          .bar.layout.center += [{
+            "id": "recorder-status",
+            "type": "command",
+            "exec": "~/.config/omarchy/bar/scripts/recorder-status",
+            "interval": 1,
+            "tooltip": "Recorder status",
+            "onClick": "screenrecord-pause-toggle"
+          }]
+        else . end)' "$SHELL_JSON" >"$tmp" && mv "$tmp" "$SHELL_JSON"
+  jq -e '.bar.layout.center | type == "array"' "$SHELL_JSON" >/dev/null ||
+    echo "NOTE: shell.json has no bar.layout.center section - add the recorder-status widget manually (see README)."
+else
+  echo "NOTE: $SHELL_JSON not found - skipping plugin/bar registration."
 fi
 
 say "Adding keybindings to ~/.config/hypr/bindings.lua"
-if [[ -f $BINDINGS ]] && ! grep -q 'omarchy-recorder-suite' "$BINDINGS"; then
+if [[ ! -f $BINDINGS ]]; then
+  echo "NOTE: $BINDINGS not found - add the keybinding block manually (see README)."
+elif grep -q 'omarchy-recorder-suite' "$BINDINGS"; then
+  echo "Keybinding block already present - leaving bindings.lua untouched."
+elif grep -qE 'screenrecord-pause-toggle|zoom-to-mouse|click-ripple-emit|"screenrecord-toggle"' "$BINDINGS"; then
+  # A key bound twice fires twice per press - for the pause toggle that means
+  # pause+resume in one hit. Never stack our block on top of manual binds.
+  echo "WARNING: bindings.lua already references recorder-suite scripts outside"
+  echo "the managed block. Skipping the keybinding append to avoid double-firing"
+  echo "keys - remove those lines and re-run, or add the block manually (README)."
+else
   cp "$BINDINGS" "$BINDINGS.bak.recorder-suite.$STAMP"
   cat >>"$BINDINGS" <<'EOF'
 
