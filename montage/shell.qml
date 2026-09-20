@@ -7,8 +7,9 @@ import QtQuick.Dialogs
 import "Export.js" as Export
 
 // Montage — a very simple video editor for screen recordings, styled after
-// omacut and themed from the active Omarchy theme: image overlay layer, cut
-// ranges, zoomable filmstrip timeline, ffmpeg export.
+// omacut and themed from the active Omarchy theme: a timeline you can join
+// more videos onto, an image overlay layer, cut ranges, zoomable filmstrip,
+// ffmpeg export.
 // Launched by ~/.local/bin/montage-editor, which probes the video and passes
 // facts through MONTAGE_* environment variables.
 ShellRoot {
@@ -18,6 +19,12 @@ ShellRoot {
   readonly property int videoW: parseInt(Quickshell.env("MONTAGE_W") || "0") || 1920
   readonly property int videoH: parseInt(Quickshell.env("MONTAGE_H") || "0") || 1080
   readonly property bool hasAudio: (Quickshell.env("MONTAGE_HAS_AUDIO") || "") === "1"
+  // Frame rate of the recording, as ffprobe's fraction ("60/1"). Videos joined
+  // onto the timeline are normalised to it, since concat wants one rate.
+  readonly property string fps: {
+    var r = (Quickshell.env("MONTAGE_FPS") || "").trim()
+    return /^[1-9]\d*(\/[1-9]\d*)?$/.test(r) ? r : "30"
+  }
   // Hardware encoding, probed by the launcher (empty when unsupported).
   readonly property string hwType: Quickshell.env("MONTAGE_HWENC") || ""
   readonly property string hwDev: Quickshell.env("MONTAGE_VAAPI_DEV") || ""
@@ -30,9 +37,11 @@ ShellRoot {
     implicitHeight: 760
     color: Theme.background
 
-    property real durationS: player.duration > 0 ? player.duration / 1000
-      : parseFloat(Quickshell.env("MONTAGE_DUR") || "0")
-    readonly property real positionS: player.position / 1000
+    // The timeline is the clips played back to back; every time below — the
+    // playhead, cuts, the overlay range — is on that joined timeline.
+    property real durationS: 0
+    property real clipOffsetS: 0
+    readonly property real positionS: clipOffsetS + player.position / 1000
     property real pendingIn: -1
 
     property string overlayPath: Quickshell.env("MONTAGE_OVERLAY") || ""
@@ -56,14 +65,140 @@ ShellRoot {
 
     readonly property string thumbDir: Quickshell.env("MONTAGE_THUMBS")
       || (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/montage-thumbs"
-    property bool thumbsReady: false
     property bool primed: false
 
+    // ------------------------------------------------------------- clips
+    // One row per video, in play order. `start` is the clip's position on the
+    // joined timeline and is recomputed by refresh(); `id` is monotonic so a
+    // clip keeps its thumbnail directory when earlier clips are removed.
+    ListModel { id: clipsModel }
+    property int nextClipId: 0
+    property bool anyAudio: false
+    // Index of the clip the player currently holds. Changing it reloads the
+    // MediaPlayer, so everything that moves the playhead across a clip
+    // boundary goes through seek().
+    property int clipIndex: 0
+    property string currentPath: ""
+    property real pendingSeekLocal: -1
+    property bool resumeAfterSwitch: false
+    property real primeTarget: 0
+    // True between a source change and the one-shot load handling for it.
+    property bool pendingLoad: false
+
+    function syncCurrent() {
+      var c = clipIndex >= 0 && clipIndex < clipsModel.count
+        ? clipsModel.get(clipIndex) : null
+      clipOffsetS = c ? c.start : 0
+      currentPath = c ? c.path : ""
+    }
+
+    function refresh() {
+      var t = 0
+      var audio = false
+      for (var i = 0; i < clipsModel.count; i++) {
+        clipsModel.setProperty(i, "start", t)
+        t += clipsModel.get(i).dur
+        if (clipsModel.get(i).hasAudio) audio = true
+      }
+      durationS = t
+      anyAudio = audio
+      syncCurrent()
+    }
+
+    function clipAt(globalS) {
+      var t = 0
+      for (var i = 0; i < clipsModel.count; i++) {
+        t += clipsModel.get(i).dur
+        if (globalS < t) return i
+      }
+      return Math.max(0, clipsModel.count - 1)
+    }
+
+    function appendClip(path, dur, clipHasAudio) {
+      var id = nextClipId++
+      clipsModel.append({
+        id: id,
+        path: path,
+        name: String(path).split("/").pop(),
+        dur: dur,
+        start: 0,
+        hasAudio: clipHasAudio,
+        // Roughly a thumbnail every three seconds, whatever the clip's length.
+        thumbs: Math.max(4, Math.min(48, Math.ceil(dur / 3))),
+        dir: thumbDir + "/c" + id,
+        ready: false
+      })
+      refresh()
+      queueThumbs(clipsModel.count - 1)
+      if (clipsModel.count > 1)
+        statusText = "Added " + String(path).split("/").pop()
+          + " — timeline is now " + fmtTime(durationS)
+    }
+
+    function addVideo(path) {
+      if (!path) return
+      probeQueue = probeQueue.concat([path])
+      pumpProbe()
+    }
+
+    // Removing a joined clip closes the gap, so cuts and the overlay range
+    // are pulled back over the removed stretch — otherwise they would silently
+    // start applying to different footage.
+    function shiftTime(t, s0, d) {
+      return t >= s0 + d ? t - d : (t > s0 ? s0 : t)
+    }
+
+    function removeClip(i) {
+      // Clip 0 is the recording the editor was opened on; it stays.
+      if (i <= 0 || i >= clipsModel.count) return
+      var gone = clipsModel.get(i)
+      var s0 = gone.start
+      var d = gone.dur
+      clipsModel.remove(i)
+
+      for (var c = cutsModel.count - 1; c >= 0; c--) {
+        var cut = cutsModel.get(c)
+        var ns = shiftTime(cut.s, s0, d)
+        var ne = shiftTime(cut.e, s0, d)
+        if (ne - ns < 0.05) cutsModel.remove(c)
+        else {
+          cutsModel.setProperty(c, "s", ns)
+          cutsModel.setProperty(c, "e", ne)
+        }
+      }
+      ovStart = shiftTime(ovStart, s0, d)
+      if (ovEnd > 0) ovEnd = shiftTime(ovEnd, s0, d)
+      if (pendingIn >= 0) pendingIn = shiftTime(pendingIn, s0, d)
+
+      if (i < clipIndex) {
+        clipIndex = clipIndex - 1   // same clip, one slot earlier
+        refresh()
+      } else if (i === clipIndex) {
+        // The playhead was inside what just went away — land on the join.
+        refresh()
+        seek(Math.min(s0, durationS))
+      } else {
+        refresh()
+      }
+      statusText = "Removed " + gone.name + " — timeline is now " + fmtTime(durationS)
+    }
+
+    // ------------------------------------------------------------ playback
     function togglePlay() {
       player.playbackState === MediaPlayer.PlayingState ? player.pause() : player.play()
     }
     function seek(s) {
-      player.position = Math.round(Math.max(0, Math.min(durationS, s)) * 1000)
+      if (clipsModel.count === 0) return
+      s = Math.max(0, Math.min(durationS, s))
+      var k = clipAt(s)
+      var local = s - clipsModel.get(k).start
+      if (k === clipIndex) {
+        player.position = Math.round(local * 1000)
+      } else {
+        resumeAfterSwitch = player.playbackState === MediaPlayer.PlayingState
+        pendingSeekLocal = local
+        clipIndex = k
+      }
     }
     function markIn() { pendingIn = positionS }
     function markOut() {
@@ -79,25 +214,33 @@ ShellRoot {
       return m + ":" + (sec < 10 ? "0" : "") + sec.toFixed(1)
     }
 
+    onClipIndexChanged: syncCurrent()
+
     function startExport() {
-      if (exporting || durationS <= 0) return
+      if (exporting || durationS <= 0 || clipsModel.count === 0) return
       var cuts = []
       for (var i = 0; i < cutsModel.count; i++) {
         var c = cutsModel.get(i)
         cuts.push({ s: c.s, e: c.e })
       }
+      var clips = []
+      for (var k = 0; k < clipsModel.count; k++) {
+        var cl = clipsModel.get(k)
+        clips.push({ path: cl.path, dur: cl.dur, hasAudio: cl.hasAudio })
+      }
       var useOv = overlayPath !== ""
-      if (!useOv && cuts.length === 0) {
-        statusText = "Nothing to export — add an image layer or mark cuts first"
+      if (!useOv && cuts.length === 0 && clips.length < 2) {
+        statusText = "Nothing to export — join a video, add an image layer, or mark cuts first"
         return
       }
       outFile = rootScope.videoFile.replace(/\.[^.\/]+$/, "") + "-montage.mp4"
       var opts = {
-        video: rootScope.videoFile,
+        clips: clips,
         out: outFile,
-        hasAudio: rootScope.hasAudio,
+        hasAudio: anyAudio,
         W: rootScope.videoW,
         H: rootScope.videoH,
+        fps: rootScope.fps,
         cuts: cuts,
         overlay: useOv ? {
           path: overlayPath,
@@ -124,6 +267,13 @@ ShellRoot {
 
     ListModel { id: cutsModel }
 
+    Component.onCompleted: {
+      if (rootScope.videoFile !== "")
+        appendClip(rootScope.videoFile,
+          parseFloat(Quickshell.env("MONTAGE_DUR") || "0") || 0,
+          rootScope.hasAudio)
+    }
+
     // Where the video actually paints inside the preview. Before the first
     // frame renders contentRect is empty, which used to collapse the image
     // overlay to zero size — fall back to the whole preview area.
@@ -133,27 +283,63 @@ ShellRoot {
 
     MediaPlayer {
       id: player
-      source: rootScope.videoFile !== "" ? "file://" + rootScope.videoFile : ""
+      source: win.currentPath !== "" ? "file://" + win.currentPath : ""
       audioOutput: AudioOutput { id: audioOut }
       videoOutput: videoOut
-      // The ffmpeg backend paints nothing until playback starts, so a fresh
-      // window (or a seek while stopped) shows black. Play muted for a beat
-      // so a real frame lands, then pause back at the start. Also kicks off
-      // filmstrip thumbnail generation.
+
+      // Only trusted when the launcher could not probe the file (duration 0);
+      // otherwise ffprobe's number wins, so the timeline never shifts under
+      // the playhead mid-session.
+      onDurationChanged: {
+        if (player.duration <= 0 || win.clipIndex >= clipsModel.count) return
+        var c = clipsModel.get(win.clipIndex)
+        if (c.dur > 0) return
+        var d = player.duration / 1000
+        clipsModel.setProperty(win.clipIndex, "dur", d)
+        clipsModel.setProperty(win.clipIndex, "thumbs",
+          Math.max(4, Math.min(48, Math.ceil(d / 3))))
+        win.refresh()
+        win.queueThumbs(win.clipIndex)
+      }
+
+      // A new file is loading: everything below runs once per source, never
+      // again while that source plays. LoadedMedia is re-emitted during normal
+      // playback, and re-running the prime on those would drag the playhead
+      // back to the clip start over and over.
+      onSourceChanged: {
+        win.pendingLoad = true
+        if (win.pendingSeekLocal < 0) win.pendingSeekLocal = 0
+      }
+
       onMediaStatusChanged: {
-        if (mediaStatus === MediaPlayer.LoadedMedia && !win.primed) {
-          win.primed = true
+        if (mediaStatus === MediaPlayer.EndOfMedia) {
+          // Roll into the next clip so the joined timeline plays as one video.
+          if (win.clipIndex + 1 < clipsModel.count) {
+            win.pendingSeekLocal = 0
+            win.resumeAfterSwitch = true
+            win.clipIndex = win.clipIndex + 1
+          }
+          return
+        }
+        if (mediaStatus !== MediaPlayer.LoadedMedia || !win.pendingLoad) return
+        win.pendingLoad = false
+        win.primed = true
+
+        var local = win.pendingSeekLocal >= 0 ? win.pendingSeekLocal : 0
+        win.pendingSeekLocal = -1
+        if (win.resumeAfterSwitch) {
+          // Came from the clip before this one while playing — keep playing.
+          win.resumeAfterSwitch = false
+          position = Math.round(local * 1000)
+          play()
+        } else {
+          // The ffmpeg backend paints nothing until playback starts, so a
+          // freshly loaded clip shows black. Play muted for a beat so a real
+          // frame lands, then pause back at the wanted spot.
+          win.primeTarget = local
           audioOut.muted = true
           play()
-          primeTimer.start()
-          if (win.durationS > 0 && !thumbProc.running) {
-            thumbProc.command = ["bash", "-c",
-              'rm -rf "$0" && mkdir -p "$0" && exec ffmpeg -y -i "$1" ' +
-              '-vf "fps=$2,scale=-1:64" "$0/t%03d.png" -loglevel error',
-              win.thumbDir, rootScope.videoFile,
-              (timeline.thumbCount / win.durationS).toFixed(6)]
-            thumbProc.running = true
-          }
+          primeTimer.restart()
         }
       }
     }
@@ -163,15 +349,95 @@ ShellRoot {
       interval: 200
       onTriggered: {
         player.pause()
-        player.position = 0
+        player.position = Math.round(win.primeTarget * 1000)
         audioOut.muted = false
       }
     }
 
+    // ---------------------------------------------------- filmstrip thumbs
+    // One ffmpeg pass per clip, run one at a time so a burst of added videos
+    // does not fork half a dozen encoders at once.
+    property var thumbQueue: []
+
+    function queueThumbs(i) {
+      thumbQueue = thumbQueue.concat([clipsModel.get(i).id])
+      pumpThumbs()
+    }
+
+    function clipById(id) {
+      for (var i = 0; i < clipsModel.count; i++)
+        if (clipsModel.get(i).id === id) return i
+      return -1
+    }
+
+    function pumpThumbs() {
+      if (thumbProc.running || thumbQueue.length === 0) return
+      var id = thumbQueue[0]
+      thumbQueue = thumbQueue.slice(1)
+      var i = clipById(id)
+      if (i < 0 || clipsModel.get(i).dur <= 0) { pumpThumbs(); return }
+      var c = clipsModel.get(i)
+      thumbProc.clipId = id
+      thumbProc.command = ["bash", "-c",
+        'rm -rf "$0" && mkdir -p "$0" && exec ffmpeg -y -i "$1" ' +
+        '-vf "fps=$2,scale=-1:64" "$0/t%03d.png" -loglevel error',
+        c.dir, c.path, (c.thumbs / c.dur).toFixed(6)]
+      thumbProc.running = true
+    }
+
     Process {
       id: thumbProc
-      onExited: code => { if (code === 0) win.thumbsReady = true }
+      property int clipId: -1
+      onExited: code => {
+        if (code === 0) {
+          var i = win.clipById(thumbProc.clipId)
+          if (i >= 0) clipsModel.setProperty(i, "ready", true)
+        }
+        thumbPump.restart()
+      }
     }
+    Timer { id: thumbPump; interval: 0; onTriggered: win.pumpThumbs() }
+
+    // ------------------------------------------------- probing added videos
+    // ffprobe before the clip joins the timeline: its duration sets where the
+    // following clips sit, and whether it has audio decides if the export has
+    // to fill in silence for it.
+    property var probeQueue: []
+
+    function pumpProbe() {
+      if (probeProc.running || probeQueue.length === 0) return
+      var f = probeQueue[0]
+      probeQueue = probeQueue.slice(1)
+      probeProc.target = f
+      probeProc.line = ""
+      statusText = "Reading " + String(f).split("/").pop() + "…"
+      probeProc.command = ["bash", "-c",
+        'd=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$0" 2>/dev/null); ' +
+        'a=$(ffprobe -v error -select_streams a -show_entries stream=codec_type ' +
+        '-of csv=p=0 "$0" 2>/dev/null | head -1); printf "%s|%s\\n" "${d:-0}" "${a:+1}"',
+        f]
+      probeProc.running = true
+    }
+
+    Process {
+      id: probeProc
+      property string target: ""
+      property string line: ""
+      stdout: SplitParser {
+        onRead: data => { if (String(data).trim() !== "") probeProc.line = String(data).trim() }
+      }
+      onExited: code => {
+        var bits = probeProc.line.split("|")
+        var d = parseFloat(bits[0] || "0")
+        if (code !== 0 || !(d > 0.05))
+          win.statusText = "Could not read "
+            + String(probeProc.target).split("/").pop() + " — is it a video?"
+        else
+          win.appendClip(probeProc.target, d, bits[1] === "1")
+        probePump.restart()
+      }
+    }
+    Timer { id: probePump; interval: 0; onTriggered: win.pumpProbe() }
 
     Process {
       id: exportProc
@@ -208,6 +474,17 @@ ShellRoot {
       }
     }
 
+    FileDialog {
+      id: vidDialog
+      title: "Add a video to the end of the timeline"
+      nameFilters: ["Videos (*.mp4 *.mkv *.webm *.mov *.avi *.m4v *.ts)",
+        "All files (*)"]
+      onAccepted: {
+        win.addVideo(decodeURIComponent(
+          String(selectedFile).replace(/^file:\/\//, "")))
+      }
+    }
+
     Shortcut { sequence: "Space"; onActivated: win.togglePlay() }
     Shortcut { sequence: "I"; onActivated: win.markIn() }
     Shortcut { sequence: "O"; onActivated: win.markOut() }
@@ -216,6 +493,8 @@ ShellRoot {
     Shortcut { sequence: "+"; onActivated: timeline.zoomIn() }
     Shortcut { sequence: "="; onActivated: timeline.zoomIn() }
     Shortcut { sequence: "-"; onActivated: timeline.zoomOut() }
+    Shortcut { sequence: "V"; onActivated: vidDialog.open() }
+    Shortcut { sequence: "L"; onActivated: imgDialog.open() }
 
     ColumnLayout {
       anchors.fill: parent
@@ -245,9 +524,12 @@ ShellRoot {
         DropArea {
           anchors.fill: parent
           onDropped: drop => {
-            if (drop.hasUrls && drop.urls.length > 0) {
-              var p = decodeURIComponent(String(drop.urls[0]).replace(/^file:\/\//, ""))
+            if (!drop.hasUrls) return
+            for (var i = 0; i < drop.urls.length; i++) {
+              var p = decodeURIComponent(String(drop.urls[i]).replace(/^file:\/\//, ""))
               if (/\.(png|jpe?g|webp|bmp)$/i.test(p)) win.overlayPath = p
+              else if (/\.(mp4|mkv|webm|mov|avi|m4v|mpe?g|wmv|flv|ts)$/i.test(p))
+                win.addVideo(p)
             }
           }
         }
@@ -363,13 +645,14 @@ ShellRoot {
           positionS: win.positionS
           pendingIn: win.pendingIn
           cutsModel: cutsModel
+          clipsModel: clipsModel
           hasOverlay: win.overlayPath !== ""
           ovStart: win.ovStart
           ovEnd: win.effOvEnd
-          thumbDir: win.thumbDir
-          thumbsReady: win.thumbsReady
           onSeekTo: s => win.seek(s)
           onRemoveCut: index => cutsModel.remove(index)
+          onAddClip: vidDialog.open()
+          onDropClip: index => win.removeClip(index)
         }
 
         IconButton {
@@ -407,8 +690,17 @@ ShellRoot {
           font.pixelSize: 11
         }
         Rectangle { width: 1; height: 20; color: Theme.panelHi }
+        MButton { text: "Add video (V)"; onClicked: vidDialog.open() }
+        Text {
+          visible: clipsModel.count > 1
+          text: clipsModel.count + " clips"
+          color: Theme.muted
+          font.family: Theme.fontFamily
+          font.pixelSize: 11
+        }
+        Rectangle { width: 1; height: 20; color: Theme.panelHi }
         MButton {
-          text: win.overlayPath === "" ? "Add image layer" : "Change image"
+          text: win.overlayPath === "" ? "Add image layer (L)" : "Change image (L)"
           onClicked: imgDialog.open()
         }
         Text {
@@ -486,7 +778,8 @@ ShellRoot {
           Layout.fillWidth: true
           text: win.statusText
           elide: Text.ElideMiddle
-          color: win.statusText.indexOf("failed") >= 0 ? Theme.red : Theme.fg
+          color: win.statusText.indexOf("failed") >= 0
+            || win.statusText.indexOf("Could not") >= 0 ? Theme.red : Theme.fg
           font.family: Theme.fontFamily
           font.pixelSize: 12
         }

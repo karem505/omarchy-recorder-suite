@@ -37,10 +37,16 @@ Everything installs into user-owned locations only. Nothing under
   click lands you in the editor.
 - **Montage** (`montage-editor <file>`, also in your app launcher and the
   file manager's *Open With…* menu):
+  - join more videos onto the timeline: hit the **+** at the end of the strip
+    (or `V`, or drop a file on the preview) and the clip is appended, plays
+    back inline as one continuous video, and is concatenated on export —
+    different resolutions, frame rates and missing audio tracks are
+    normalised for you. Click a joined clip's **×** to drop it again
   - image overlay layer: drag to place, corner-grip / slider / wheel to
     resize, time range pinned to the playhead
   - cut sections: mark in/out at the playhead, ranges show red on the
-    timeline, removed on export with audio kept in sync
+    timeline, removed on export with audio kept in sync — cuts are on the
+    joined timeline, so they survive clips being added or dropped
   - zoomable filmstrip timeline with real frame thumbnails (Ctrl+wheel zooms
     around the cursor, wheel pans, click/drag seeks)
   - ffmpeg export with progress, saved as `<name>-montage.mp4` —
@@ -116,6 +122,7 @@ stop the deploy; nothing is ever force-reset.
 | left click | Ripple wave (only while recording) |
 | **Montage:** `Space` | play / pause |
 | `I` / `O` | mark cut in / out |
+| `V` / `L` | add a video clip / an image layer |
 | `←` / `→` | seek 1s |
 | `+` / `-` / Ctrl+wheel | timeline zoom |
 

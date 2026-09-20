@@ -18,6 +18,9 @@ W=${probe%%x*}
 H=${probe##*x}
 dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f")
 audio=$(ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "$f" | head -1)
+# Frame rate as a fraction ("60/1"). Videos joined onto the timeline in the
+# editor are normalised to it, since ffmpeg's concat wants one rate.
+fps=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$f")
 
 # Probe for a VAAPI-capable render node; Montage encodes on the GPU when one
 # works and falls back to CPU (libx264) otherwise. On dual-GPU machines the
@@ -35,7 +38,7 @@ for d in /dev/dri/renderD*; do
 done
 
 exec env MONTAGE_FILE="$f" MONTAGE_W="$W" MONTAGE_H="$H" \
-  MONTAGE_DUR="$dur" MONTAGE_HAS_AUDIO="${audio:+1}" \
+  MONTAGE_DUR="$dur" MONTAGE_HAS_AUDIO="${audio:+1}" MONTAGE_FPS="$fps" \
   MONTAGE_THUMBS="${XDG_RUNTIME_DIR:-/tmp}/montage-thumbs-$$" \
   MONTAGE_HWENC="$HWENC" MONTAGE_VAAPI_DEV="$VAAPI_DEV" \
   quickshell -p "$HOME/.config/quickshell/montage"
